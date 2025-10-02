@@ -1,0 +1,35 @@
+# Default configuration for DeepSea-AI Stage 1 pipeline
+paths:
+  raw_fastq_dir: data/raw/fastq_dataset
+  interim_dir: data/interim
+  processed_dir: data/processed
+  logs_dir: logs
+
+fastp:
+  enabled: true
+  threads: 4
+  qualified_quality_phred: 15
+  length_required: 50
+  detect_adapter_for_pe: true
+  json_report: fastp_report.json
+  html_report: fastp_report.html
+
+dada2:
+  enabled: true
+  trunc_len: 0        # 0 means no truncation
+  max_ee: 2           # Maximum expected errors
+  trunc_q: 2          # Truncate reads at first quality score <= trunc_q
+  pool_method: pseudo # pseudo | pool | independent
+  chimera_method: consensus
+  min_fold_parent_over_abundance: 1.0
+  output_prefix: dada2
+
+kmer:
+  enabled: true
+  k: 6
+  normalize: true
+  output_vectors: kmer_vectors.csv
+  output_metadata: kmer_metadata.json
+
+logging:
+  level: INFO

@@ -1,0 +1,183 @@
+Identification Engine: Fine-Tuning Workflow (Final Detailed Version)
+
+This workflow assumes you have uploaded all metadata to Google Drive and will use Colab for training.
+
+Stage 1: Environment Setup & Data Loading ⚙️
+
+Purpose: Ensure the environment is correctly configured for a large transformer model and data is ready for preprocessing.
+
+Configure Colab Runtime
+
+Use a GPU runtime (T4 or V100 recommended).
+
+Reason: The 2.5B parameter model requires GPU acceleration; otherwise training is impractically slow.
+
+Install Dependencies
+
+Libraries: transformers (for Hugging Face models), datasets (for optimized dataset handling), biopython (for reading FASTA files), scikit-learn (for metrics & cross-validation).
+
+Reason: Hugging Face tools are standard for transformer training; Biopython allows efficient sequence parsing.
+
+Mount Google Drive
+
+Access sequences.fasta, labels.csv, vectors.csv, clusters.csv directly.
+
+Reason: Storing data in Drive allows persistent access without re-uploading.
+
+Load Data
+
+Load sequences and labels into a Pandas DataFrame or dictionaries.
+
+Verify alignment of all 22,073 sequences, labels, vectors, and clusters.
+
+Reason: Ensures that downstream preprocessing and tokenization are accurate.
+
+Stage 2: Data Preprocessing & Cleaning 🧹
+
+Purpose: Prepare the dataset for effective model learning, accounting for class imbalance and ensuring labels are machine-readable.
+
+Filter Singleton Species
+
+Identify species with only 1 sequence and optionally remove them.
+
+Reason: Single-example species do not provide sufficient information for the model to learn patterns, potentially causing noise.
+
+Create Label Mappings
+
+Map species names → integer labels (label2id) and reverse (id2label).
+
+Reason: Transformers require numerical labels for classification tasks.
+
+Check Class Balance
+
+Analyze the distribution of sequences per species.
+
+Reason: Multi-class imbalance affects learning and evaluation; guides metrics choice (PR-AUC over plain accuracy).
+
+Stage 3: Tokenization & Dataset Creation 🧬
+
+Purpose: Convert DNA sequences into a format compatible with the transformer.
+
+Load Tokenizer
+
+Use tokenizer for InstaDeepAI/nucleotide-transformer-2.5b-multi-species.
+
+Reason: DNA-specific tokenization captures k-mer patterns and sequence semantics.
+
+Tokenize Sequences
+
+Convert sequences into numerical IDs the model can process.
+
+Create Hugging Face Dataset
+
+Structure data as Dataset objects with inputs and labels.
+
+Reason: Optimized for batch training and works directly with Hugging Face Trainer.
+
+Stratified 5-Fold Cross-Validation
+
+Split dataset into 5 folds, maintaining species proportions in each fold.
+
+Reason: Ensures all species are represented in training and validation, especially rare ones.
+
+Note: Each fold will serve as validation once while the other 4 folds are used for training.
+
+Stage 4: Model Configuration 🤖
+
+Purpose: Load the pre-trained model and adapt it for your multi-class classification task.
+
+Load Base Model
+
+InstaDeepAI/nucleotide-transformer-2.5b-multi-species
+
+Reason: Pre-trained on diverse species; reduces training time and improves feature extraction.
+
+Add Classification Head
+
+Attach a new output layer matching the number of species in your filtered dataset.
+
+Reason: The original model predicts general sequences; we need outputs specific to marine eukaryotic species.
+
+Optional: LoRA/PEFT
+
+Use parameter-efficient fine-tuning.
+
+Reason: Reduces GPU memory usage while maintaining performance.
+
+Stage 5: Fine-Tuning 🚀
+
+Purpose: Train the model on your dataset while monitoring metrics that reflect probability-based predictions.
+
+Define Training Arguments
+
+Learning rate, batch size, number of epochs, evaluation frequency.
+
+Reason: Controls training stability, convergence, and model generalization.
+
+Define Evaluation Metrics
+
+Top-1 / Top-k Accuracy: Basic correctness check.
+
+Macro / Weighted F1: Measures performance accounting for class imbalance.
+
+Log Loss / Brier Score: Quantifies probabilistic calibration.
+
+PR-AUC (Macro or Weighted): Measures performance on imbalanced classes, emphasizing rare species.
+
+Reason: Accuracy alone is insufficient for probabilistic outputs; PR-AUC is ideal for detecting rare species in your multi-class setup.
+
+Trainer Instantiation
+
+Use Hugging Face Trainer to combine model, datasets, metrics, and training arguments.
+
+Reason: Provides built-in training loops, checkpointing, and evaluation support.
+
+Train Model
+
+Fine-tune using stratified 5-fold cross-validation.
+
+Reason: Validates generalization across folds and ensures rare species are not neglected.
+
+Stage 6: Evaluation & Calibration 💡
+
+Purpose: Assess model generalization and improve probability predictions.
+
+Evaluate Each Fold
+
+Compute PR-AUC on validation set per fold.
+
+Track training vs validation PR-AUC.
+
+Reason: Large discrepancies indicate overfitting; small discrepancies indicate good generalization.
+
+Calibration (Optional)
+
+Use Platt Scaling or Isotonic Regression on model probabilities.
+
+Reason: Ensures predicted probabilities are reliable for downstream applications.
+
+Stage 7: Model Saving & Deployment 💾
+
+Save Fine-Tuned Model
+
+Include classification head and tokenizer.
+
+Reason: Preserves the full custom model for inference.
+
+Optionally Save Lightweight Version
+
+Freeze base transformer layers to reduce inference memory footprint.
+
+Reason: Speeds up predictions in deployment.
+
+✅ Key Highlights & Reasoning
+
+Using PR-AUC is crucial due to rare species representation.
+
+5-fold stratified CV ensures robust evaluation across all species.
+
+Comparing training vs validation PR-AUC prevents overfitting.
+
+LoRA/PEFT allows fine-tuning large 2.5B parameter models on Colab GPU memory.
+
+Base model (nucleotide-transformer-2.5b-multi-species) provides strong pretrained embeddings for marine eukaryotes.
