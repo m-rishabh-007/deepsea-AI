@@ -257,4 +257,4 @@ This Stage 1 module prepares data for:
 
 ## License
 
-MIT (add file if appropriate).
+None .
