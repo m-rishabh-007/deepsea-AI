@@ -6,6 +6,7 @@ from datetime import datetime
 def create_job(db: Session, job_in: JobCreate, raw_dir: str, interim_dir: str, processed_dir: str):
     job = models.PipelineJob(
         name=job_in.name,
+        description=job_in.description,
         raw_dir=raw_dir,
         interim_dir=interim_dir,
         processed_dir=processed_dir,

@@ -13,6 +13,7 @@ class PipelineJob(Base):
     __tablename__ = "pipeline_jobs"
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
     status = Column(Enum(JobStatus), default=JobStatus.PENDING, index=True)
     raw_dir = Column(String(255), nullable=False)
     interim_dir = Column(String(255), nullable=False)

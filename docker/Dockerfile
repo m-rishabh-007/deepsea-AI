@@ -1,30 +1,32 @@
-# Base image with Python and R (use rocker project for R + add Python) OR start from python and add R
-FROM ubuntu:22.04 as base
+# Use pre-built Bioconductor image to avoid compiling heavy R packages from source
+FROM bioconductor/bioconductor_docker:RELEASE_3_18 AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install system deps
+# Install Python runtime and supporting tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-dev build-essential \
     wget curl git ca-certificates \
-    r-base r-base-dev \
-    libz-dev libssl-dev libxml2-dev libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install fastp
+# Ensure python command is available and upgrade pip stack
+RUN ln -s /usr/bin/python3 /usr/bin/python && \
+    python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# Install fastp binary
 RUN wget -O /usr/local/bin/fastp http://opengene.org/fastp/fastp && chmod +x /usr/local/bin/fastp
 
-# Install DADA2 in R
-RUN R -q -e "install.packages('BiocManager'); BiocManager::install(c('dada2'), ask=FALSE, update=FALSE)"
+# Verify DADA2 is present; install only if missing (should be bundled with base image)
+RUN R -q -e "if (!requireNamespace('BiocManager', quietly = TRUE)) install.packages('BiocManager'); if (!requireNamespace('dada2', quietly = TRUE)) { BiocManager::install('dada2', ask = FALSE, update = FALSE) }"
 
 # Set workdir
 WORKDIR /app
 
-# Copy requirements
+# Copy requirements and install Python dependencies
 COPY requirements.txt ./
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-# Copy source
+# Copy application sources
 COPY src ./src
 COPY scripts ./scripts
 COPY config ./config

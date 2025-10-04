@@ -11,11 +11,13 @@ class JobStatus(str, Enum):
 
 class JobCreate(BaseModel):
     name: str = Field(..., max_length=100)
+    description: Optional[str] = Field(None, max_length=500)
     kmer_k: int = 6
 
 class Job(BaseModel):
     id: int
     name: str
+    description: Optional[str]
     status: JobStatus
     kmer_k: int
     meta: Optional[Any]
