@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from . import models
 from .schemas import JobCreate
-from datetime import datetime
+from datetime import datetime, timezone
 
 def create_job(db: Session, job_in: JobCreate, raw_dir: str, interim_dir: str, processed_dir: str):
     job = models.PipelineJob(
@@ -10,7 +10,6 @@ def create_job(db: Session, job_in: JobCreate, raw_dir: str, interim_dir: str, p
         raw_dir=raw_dir,
         interim_dir=interim_dir,
         processed_dir=processed_dir,
-        kmer_k=job_in.kmer_k,
     )
     db.add(job)
     db.commit()
@@ -27,7 +26,24 @@ def update_job_status(db: Session, job_id: int, status: models.JobStatus, meta=N
         job.meta = meta
     if error:
         job.error = error
-    job.updated_at = datetime.utcnow()
+    job.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+def update_job_meta(db: Session, job_id: int, meta: dict | None = None, error: str | None = None):
+    job = db.query(models.PipelineJob).filter(models.PipelineJob.id == job_id).first()
+    if not job:
+        return None
+    if meta is not None:
+        current = job.meta or {}
+        # shallow merge to preserve existing keys while updating incoming ones
+        current.update(meta)
+        job.meta = current
+    if error is not None:
+        job.error = error
+    job.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(job)
     return job

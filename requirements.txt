@@ -11,9 +11,10 @@ rich>=13.7.0
 fastapi>=0.110.0
 uvicorn[standard]>=0.27.0
 streamlit>=1.33.0
+watchdog>=2.1.5,<4.0
 plotly>=5.20.0
-# For running R from Python
-rpy2>=3.5.11
+# HTTP client for integration/smoke tests
+requests>=2.31.0
 # Optional for progress bars
 tqdm>=4.66.0
 SQLAlchemy>=2.0.25

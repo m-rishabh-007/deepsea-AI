@@ -1,6 +1,6 @@
 import yaml
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 from typing import List, Optional, Dict
 from loguru import logger
@@ -9,9 +9,6 @@ from src.utils.logging_setup import setup_logging
 from src.preprocessing.fastp_wrapper import run_fastp
 from src.preprocessing.dada2_wrapper import run_dada2
 from src.preprocessing.read_detection import detect_fastq_layout, representative_inputs
-from src.preprocessing.kmer_vectorizer import vectorize_asv_table, save_vectors
-
-
 def load_config(path: str = 'config/pipeline.yaml') -> dict:
     with open(path, 'r') as f:
         return yaml.safe_load(f)
@@ -25,19 +22,13 @@ def run_pipeline(
     raw_dir: str | Path,
     interim_dir: str | Path,
     processed_dir: str | Path,
-    config_path: str = 'config/pipeline.yaml',
-    k: Optional[int] = None,
-    normalize: Optional[bool] = None,
-    output_vectors_name: Optional[str] = None
+    config_path: str = 'config/pipeline.yaml'
 ) -> dict:
     """Run the Stage 1 pipeline for a specific job.
 
     Parameters
     ----------
     raw_dir / interim_dir / processed_dir : job-specific directories.
-    k : override k-mer length.
-    normalize : override normalization flag.
-    output_vectors_name : custom filename for vectors.
     """
     cfg = load_config(config_path)
     logger_obj = setup_logging(cfg.get('paths', {}).get('logs_dir', 'logs'), cfg.get('logging', {}).get('level', 'INFO'))
@@ -55,12 +46,28 @@ def run_pipeline(
         raise FileNotFoundError(f'No FASTQ files found in {raw_dir}')
     mode = 'paired' if len(representative) == 2 else 'single'
 
-    # FASTP
+    progress_meta = {"history": []}
+
+    def append_progress(step: str, status: str, message: str | None = None):
+        entry = {
+            "step": step,
+            "status": status,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        if message:
+            entry["message"] = message
+        progress_meta["history"].append(entry)
+        progress_meta["step"] = step
+        progress_meta["status"] = status
+
+    append_progress("fastp", "running", "Preparing to run fastp")
+
     fastp_cfg = cfg['fastp']
     fastp_outputs = None
     if fastp_cfg.get('enabled', True):
         # For now pick first two if paired, will upgrade with detection later.
         inputs = representative
+        append_progress("fastp", "running", "Executing fastp")
         fastp_outputs = run_fastp(
             input_fastq=inputs,
             output_dir=str(interim_dir),
@@ -71,13 +78,16 @@ def run_pipeline(
             json_report=fastp_cfg.get('json_report', 'fastp_report.json'),
             html_report=fastp_cfg.get('html_report', 'fastp_report.html')
         )
+        append_progress("fastp", "completed", "fastp finished")
     else:
         logger.info('Skipping fastp step per config.')
+        append_progress("fastp", "skipped", "fastp disabled in configuration")
 
-    # DADA2
+    append_progress("dada2", "running", "Preparing to run DADA2")
     dada2_cfg = cfg['dada2']
     dada2_outputs = None
     if dada2_cfg.get('enabled', True):
+        append_progress("dada2", "running", "Executing DADA2")
         dada2_outputs = run_dada2(
             clean_dir=str(interim_dir),
             output_dir=str(processed_dir),
@@ -87,33 +97,19 @@ def run_pipeline(
             trunc_q=dada2_cfg.get('trunc_q', 2),
             pool_method=dada2_cfg.get('pool_method', 'pseudo')
         )
+        append_progress("dada2", "completed", "DADA2 finished")
     else:
         logger.info('Skipping DADA2 step per config.')
-
-    # K-mer vectorization
-    kmer_cfg = cfg['kmer']
-    kmer_outputs = None
-    if kmer_cfg.get('enabled', True):
-        if not dada2_outputs:
-            raise RuntimeError('K-mer step requires DADA2 outputs.')
-        k_val = k if k is not None else kmer_cfg.get('k', 6)
-        norm_val = normalize if normalize is not None else kmer_cfg.get('normalize', True)
-        out_name = output_vectors_name if output_vectors_name else kmer_cfg.get('output_vectors', 'kmer_vectors.csv')
-        df_vectors = vectorize_asv_table(dada2_outputs['asv_table'], k=k_val, normalize=norm_val)
-        vectors_path = processed_dir / out_name
-        save_vectors(df_vectors, str(vectors_path))
-        kmer_outputs = {"vectors_csv": str(vectors_path), "k": k_val, "normalize": norm_val}
-    else:
-        logger.info('Skipping k-mer step per config.')
+        append_progress("dada2", "skipped", "DADA2 disabled in configuration")
 
     meta = {
-        'timestamp': datetime.utcnow().isoformat(),
+    'timestamp': datetime.now(timezone.utc).isoformat(),
         'raw_dir': str(raw_dir),
         'interim_dir': str(interim_dir),
         'processed_dir': str(processed_dir),
         'fastp': fastp_outputs,
         'dada2': dada2_outputs | {"mode": mode} if dada2_outputs else None,
-        'kmer': kmer_outputs
+        'progress': progress_meta
     }
     meta_path = processed_dir / 'stage1_metadata.json'
     with open(meta_path, 'w') as f:

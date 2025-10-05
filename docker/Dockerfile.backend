@@ -7,6 +7,8 @@ RUN apt-get update && apt-get install -y \
     curl \
     wget \
     unzip \
+    file \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # Install R and DADA2
@@ -15,13 +17,24 @@ RUN apt-get update && apt-get install -y \
     r-base-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install R packages
-RUN R -e "install.packages(c('dada2', 'jsonlite'), repos='https://cloud.r-project.org/')"
+# System dependencies for Bioconductor packages
+RUN apt-get update && apt-get install -y \
+    libcurl4-openssl-dev \
+    libssl-dev \
+    libxml2-dev \
+    libgit2-dev \
+    libbz2-dev \
+    liblzma-dev \
+    libpcre2-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install R packages (Bioconductor DADA2 + jsonlite)
+RUN R -q -e "if (!requireNamespace('BiocManager', quietly = TRUE)) install.packages('BiocManager', repos='https://cloud.r-project.org/')" \
+    -e "if (!requireNamespace('dada2', quietly = TRUE)) BiocManager::install('dada2', ask = FALSE, update = FALSE)" \
+    -e "if (!requireNamespace('jsonlite', quietly = TRUE)) install.packages('jsonlite', repos='https://cloud.r-project.org/')"
 
 # Install fastp using a more reliable method
-RUN apt-get update && apt-get install -y \
-    && curl -L https://github.com/OpenGene/fastp/releases/download/v0.23.4/fastp -o /usr/local/bin/fastp \
-    && chmod +x /usr/local/bin/fastp \
+RUN apt-get update && apt-get install -y fastp \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory

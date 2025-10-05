@@ -29,12 +29,6 @@ def sample_config(tmp_path, monkeypatch):
             "trunc_q": 2,
             "pool_method": "pseudo"
         },
-        "kmer": {
-            "enabled": True,
-            "k": 6,
-            "normalize": True,
-            "output_vectors": "kmer_vectors.csv"
-        },
         "logging": {
             "level": "INFO"
         }
@@ -108,23 +102,7 @@ def mock_dada2(monkeypatch, tmp_path):
     return outputs
 
 
-@pytest.fixture
-def mock_vectorizer(monkeypatch, tmp_path):
-    import pandas as pd
-
-    def fake_vectorize(asv_table, k, normalize):
-        return pd.DataFrame([
-            {"sequence": "ACGT", "count": 10, "AAAAAA": 0.1}
-        ])
-
-    def fake_save_vectors(df, output_csv):
-        Path(output_csv).write_text(df.to_csv(index=False))
-
-    monkeypatch.setattr(pipeline, "vectorize_asv_table", fake_vectorize)
-    monkeypatch.setattr(pipeline, "save_vectors", fake_save_vectors)
-
-
-def test_pipeline_happy_path(sample_config, raw_dir, interim_dir, processed_dir, mock_fastp, mock_dada2, mock_vectorizer, monkeypatch, tmp_path):
+def test_pipeline_happy_path(sample_config, raw_dir, interim_dir, processed_dir, mock_fastp, mock_dada2, monkeypatch, tmp_path):
     meta = pipeline.run_pipeline(
         raw_dir=raw_dir,
         interim_dir=interim_dir,
@@ -134,8 +112,6 @@ def test_pipeline_happy_path(sample_config, raw_dir, interim_dir, processed_dir,
 
     assert meta["fastp"] == mock_fastp
     assert meta["dada2"] | {"mode": "paired"} == meta["dada2"]
-    assert meta["kmer"]["vectors_csv"].endswith("kmer_vectors.csv")
-    assert (Path(processed_dir) / "kmer_vectors.csv").exists()
     assert (Path(processed_dir) / "stage1_metadata.json").exists()
 
 
@@ -155,7 +131,6 @@ def test_pipeline_skips_steps(sample_config, raw_dir, interim_dir, processed_dir
     cfg = sample_config
     cfg["fastp"]["enabled"] = False
     cfg["dada2"]["enabled"] = False
-    cfg["kmer"]["enabled"] = False
 
     def fake_load_config(_path):
         return cfg
@@ -170,5 +145,4 @@ def test_pipeline_skips_steps(sample_config, raw_dir, interim_dir, processed_dir
 
     assert meta["fastp"] is None
     assert meta["dada2"] is None
-    assert meta["kmer"] is None
     assert (Path(processed_dir) / "stage1_metadata.json").exists()

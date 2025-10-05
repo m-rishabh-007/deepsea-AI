@@ -6,15 +6,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Install Python runtime and supporting tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-dev build-essential \
-    wget curl git ca-certificates \
+    wget curl git ca-certificates fastp file \
     && rm -rf /var/lib/apt/lists/*
 
 # Ensure python command is available and upgrade pip stack
 RUN ln -s /usr/bin/python3 /usr/bin/python && \
     python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel
-
-# Install fastp binary
-RUN wget -O /usr/local/bin/fastp http://opengene.org/fastp/fastp && chmod +x /usr/local/bin/fastp
 
 # Verify DADA2 is present; install only if missing (should be bundled with base image)
 RUN R -q -e "if (!requireNamespace('BiocManager', quietly = TRUE)) install.packages('BiocManager'); if (!requireNamespace('dada2', quietly = TRUE)) { BiocManager::install('dada2', ask = FALSE, update = FALSE) }"

@@ -1,10 +1,12 @@
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, BackgroundTasks
+from contextlib import asynccontextmanager
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from pathlib import Path
 import shutil
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 import io
 from typing import List
 
@@ -13,14 +15,16 @@ from src.db import crud, schemas, models
 from src.db.init_db import init_db
 from src.pipeline import run_pipeline
 
-app = FastAPI(title="DeepSea-AI Stage 1 API", version="1.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(title="DeepSea-AI Stage 1 API", version="1.0.0", lifespan=lifespan)
 
 # Thread pool for background tasks
 executor = ThreadPoolExecutor(max_workers=2)
-
-@app.on_event("startup")
-async def startup_event():
-    init_db()
 
 @app.post("/jobs", response_model=schemas.Job)
 def create_job(job: schemas.JobCreate, db: Session = Depends(get_db)):
@@ -61,7 +65,7 @@ def upload_files(job_id: int, files: List[UploadFile] = File(...), db: Session =
     
     return {"uploaded_files": uploaded_files, "count": len(uploaded_files)}
 
-def _run_pipeline_background(job_id: int, k: int):
+def _run_pipeline_background(job_id: int):
     """Background task to run pipeline and update job status."""
     from src.db.session import SessionLocal
     db = SessionLocal()
@@ -71,18 +75,46 @@ def _run_pipeline_background(job_id: int, k: int):
             return
         
         crud.update_job_status(db, job_id, models.JobStatus.RUNNING)
-        
+
+        progress = {"history": []}
+
+        def record_progress(step: str, status: str, message: str | None = None):
+            entry = {
+                "step": step,
+                "status": status,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            if message:
+                entry["message"] = message
+            progress["step"] = step
+            progress["status"] = status
+            history = progress.get("history", [])
+            progress["history"] = history + [entry]
+            crud.update_job_meta(db, job_id, {"progress": progress})
+
+        record_progress("fastp", "running", "Starting quality control")
+
         # Run pipeline
         metadata = run_pipeline(
             raw_dir=job.raw_dir,
             interim_dir=job.interim_dir,
-            processed_dir=job.processed_dir,
-            k=k
+            processed_dir=job.processed_dir
         )
-        
+
+        progress["step"] = "complete"
+        progress["status"] = "finished"
+        progress["history"] = progress.get("history", []) + [{
+            "step": "complete",
+            "status": "finished",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "message": "Pipeline completed"
+        }]
+        metadata["progress"] = progress
+
         crud.update_job_status(db, job_id, models.JobStatus.COMPLETED, meta=metadata)
         
     except Exception as e:
+        record_progress("error", "failed", str(e)) if 'record_progress' in locals() else None
         crud.update_job_status(db, job_id, models.JobStatus.FAILED, error=str(e))
     finally:
         db.close()
@@ -103,7 +135,7 @@ def run_job(job_id: int, background_tasks: BackgroundTasks, db: Session = Depend
         raise HTTPException(status_code=400, detail="No FASTQ files uploaded")
     
     # Submit background task
-    background_tasks.add_task(_run_pipeline_background, job_id, job.kmer_k)
+    background_tasks.add_task(_run_pipeline_background, job_id)
     
     return {"message": "Pipeline started", "job_id": job_id}
 
@@ -119,29 +151,6 @@ def get_job(job_id: int, db: Session = Depends(get_db)):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
-
-@app.get("/jobs/{job_id}/vectors")
-def download_vectors(job_id: int, db: Session = Depends(get_db)):
-    """Download k-mer vectors CSV file."""
-    job = crud.get_job(db, job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    if job.status != models.JobStatus.COMPLETED:
-        raise HTTPException(status_code=400, detail="Job not completed")
-    
-    if not job.meta or not job.meta.get('kmer', {}).get('vectors_csv'):
-        raise HTTPException(status_code=404, detail="Vectors file not found")
-    
-    vectors_path = Path(job.meta['kmer']['vectors_csv'])
-    if not vectors_path.exists():
-        raise HTTPException(status_code=404, detail="Vectors file not found on disk")
-    
-    return FileResponse(
-        path=str(vectors_path),
-        filename=f"job_{job_id}_kmer_vectors.csv",
-        media_type="text/csv"
-    )
 
 @app.get("/jobs/{job_id}/metadata")
 def get_job_metadata(job_id: int, db: Session = Depends(get_db)):

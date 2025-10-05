@@ -49,6 +49,21 @@ CATTACAGATTACAGATTACAGATTACAGATTACAGATTACAGATTACAGATTACAGATTACAGATTACAGATTACAGAT
 IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII
 """
 
+
+def _create_job(client, *, job_data=None):
+    payload = job_data or {
+        "name": "Test Job",
+        "description": "Test job for API testing",
+    }
+    response = client.post("/jobs", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["name"] == payload["name"]
+    assert data["description"] == payload["description"]
+    assert data["status"] == "PENDING"
+    assert "id" in data
+    return data
+
 def test_health_check(client):
     """Test health check endpoint."""
     response = client.get("/health")
@@ -59,27 +74,14 @@ def test_health_check(client):
 
 def test_create_job(client):
     """Test job creation."""
-    job_data = {
-        "name": "Test Job",
-        "description": "Test job for API testing",
-        "kmer_k": 6
-    }
-    response = client.post("/jobs", json=job_data)
-    assert response.status_code == 200
-    
-    data = response.json()
-    assert data["name"] == job_data["name"]
-    assert data["description"] == job_data["description"]
-    assert data["kmer_k"] == job_data["kmer_k"]
-    assert data["status"] == "PENDING"
-    assert "id" in data
-    
-    return data["id"]
+    data = _create_job(client)
+    assert data["name"] == "Test Job"
+    assert data["description"] == "Test job for API testing"
 
 def test_list_jobs(client):
     """Test listing jobs."""
     # Create a job first
-    test_create_job(client)
+    _create_job(client)
     
     response = client.get("/jobs")
     assert response.status_code == 200
@@ -90,7 +92,8 @@ def test_list_jobs(client):
 
 def test_get_job(client):
     """Test getting specific job."""
-    job_id = test_create_job(client)
+    job = _create_job(client)
+    job_id = job["id"]
     
     response = client.get(f"/jobs/{job_id}")
     assert response.status_code == 200
@@ -106,7 +109,7 @@ def test_get_nonexistent_job(client):
 
 def test_upload_files(client, sample_fastq_content):
     """Test file upload."""
-    job_id = test_create_job(client)
+    job_id = _create_job(client)["id"]
     
     # Create temporary FASTQ file
     with tempfile.NamedTemporaryFile(mode='w', suffix='.fastq', delete=False) as f:
@@ -127,7 +130,7 @@ def test_upload_files(client, sample_fastq_content):
 
 def test_upload_invalid_file_type(client):
     """Test uploading invalid file type."""
-    job_id = test_create_job(client)
+    job_id = _create_job(client)["id"]
     
     # Create temporary non-FASTQ file
     with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
@@ -146,7 +149,7 @@ def test_upload_invalid_file_type(client):
 
 def test_run_job_without_files(client):
     """Test running job without uploaded files."""
-    job_id = test_create_job(client)
+    job_id = _create_job(client)["id"]
     
     response = client.post(f"/jobs/{job_id}/run")
     assert response.status_code == 400
@@ -154,7 +157,7 @@ def test_run_job_without_files(client):
 
 def test_run_job_invalid_status(client, sample_fastq_content):
     """Test running job with invalid status."""
-    job_id = test_create_job(client)
+    job_id = _create_job(client)["id"]
     
     # Upload files first
     with tempfile.NamedTemporaryFile(mode='w', suffix='.fastq', delete=False) as f:
@@ -179,7 +182,7 @@ def test_run_job_invalid_status(client, sample_fastq_content):
 
 def test_get_job_metadata(client):
     """Test getting job metadata."""
-    job_id = test_create_job(client)
+    job_id = _create_job(client)["id"]
     
     response = client.get(f"/jobs/{job_id}/metadata")
     assert response.status_code == 200
@@ -189,14 +192,6 @@ def test_get_job_metadata(client):
     assert data["status"] == "PENDING"
     assert "created_at" in data
     assert "updated_at" in data
-
-def test_download_vectors_job_not_completed(client):
-    """Test downloading vectors from incomplete job."""
-    job_id = test_create_job(client)
-    
-    response = client.get(f"/jobs/{job_id}/vectors")
-    assert response.status_code == 400
-    assert "Job not completed" in response.json()["detail"]
 
 if __name__ == "__main__":
     pytest.main([__file__])

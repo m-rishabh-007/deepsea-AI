@@ -24,12 +24,5 @@ dada2:
   min_fold_parent_over_abundance: 1.0
   output_prefix: dada2
 
-kmer:
-  enabled: true
-  k: 6
-  normalize: true
-  output_vectors: kmer_vectors.csv
-  output_metadata: kmer_metadata.json
-
 logging:
   level: INFO

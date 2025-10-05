@@ -8,11 +8,12 @@ import shutil
 import yaml
 import json
 import time
+from datetime import datetime
 from src.pipeline import run_pipeline, load_config
 from src.utils.logging_setup import setup_logging
 
 st.set_page_config(page_title="DeepSea-AI Stage 1", layout="wide")
-st.title("DeepSea-AI: Stage 1 Preprocessing & Vectorization")
+st.title("DeepSea-AI: Stage 1 Preprocessing & ASV Analysis")
 
 CONFIG_PATH = 'config/pipeline.yaml'
 
@@ -41,12 +42,12 @@ def display_pipeline_results(meta, interim_dir, processed_dir, key_suffix=""):
             st.metric("🔬 ASVs Detected", len(asv_df))
     
     with col3:
-        if os.path.exists(meta.get('kmer', {}).get('vectors_csv', '')):
-            kmer_df = pd.read_csv(meta['kmer']['vectors_csv'])
-            st.metric("📊 K-mer Features", len(kmer_df.columns) - 2)  # Exclude sequence and count
+        if os.path.exists(meta.get('dada2', {}).get('asv_table', '')):
+            asv_df = pd.read_csv(meta['dada2']['asv_table'])
+            st.metric("📊 Total Reads", asv_df['count'].sum() if 'count' in asv_df.columns else 0)
     
     # Tabs for different result views
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📈 Processing Stats", "🧬 ASV Results", "📊 K-mer Vectors", "📋 Quality Report", "📁 Files"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📈 Processing Stats", "🧬 ASV Results", "📋 Quality Report", "📁 Files"])
     
     with tab1:
         st.subheader("Pipeline Processing Statistics")
@@ -122,42 +123,6 @@ def display_pipeline_results(meta, interim_dir, processed_dir, key_suffix=""):
             )
     
     with tab3:
-        st.subheader("K-mer Vector Analysis")
-        
-        kmer_path = meta.get('kmer', {}).get('vectors_csv', '')
-        if os.path.exists(kmer_path):
-            kmer_df = pd.read_csv(kmer_path)
-            
-            col1, col2 = st.columns([2, 1])
-            with col1:
-                st.write("**K-mer Vectors Preview:**")
-                # Show first few rows and columns
-                preview_df = kmer_df.iloc[:10, :10]  # First 10 rows, first 10 k-mer columns
-                st.dataframe(preview_df, width='stretch')
-            
-            with col2:
-                st.write("**Dataset Info:**")
-                st.write(f"- Sequences: {len(kmer_df)}")
-                st.write(f"- K-mer features: {len(kmer_df.columns) - 2}")
-                st.write(f"- File size: {os.path.getsize(kmer_path) / 1024 / 1024:.1f} MB")
-                
-                # Sparsity analysis
-                numeric_cols = kmer_df.select_dtypes(include=[float, int]).columns
-                if len(numeric_cols) > 0:
-                    sparsity = (kmer_df[numeric_cols] == 0).mean().mean()
-                    st.write(f"- Sparsity: {sparsity:.1%}")
-            
-            # Download button for k-mer vectors
-            csv_data = kmer_df.to_csv(index=False)
-            st.download_button(
-                label="📥 Download K-mer Vectors",
-                data=csv_data,
-                file_name="kmer_vectors.csv",
-                mime="text/csv",
-                key=f"download_kmer_vectors{key_suffix}"
-            )
-    
-    with tab4:
         st.subheader("Quality Control Report")
         
         # Display fastp HTML report content (extract key sections)
@@ -194,7 +159,7 @@ def display_pipeline_results(meta, interim_dir, processed_dir, key_suffix=""):
                 key=f"download_fastp_html{key_suffix}"
             )
     
-    with tab5:
+    with tab4:
         st.subheader("Output Files & Metadata")
         
         st.write("**📁 Generated Files:**")
@@ -220,12 +185,11 @@ def display_pipeline_results(meta, interim_dir, processed_dir, key_suffix=""):
         st.write("**🔧 Complete Metadata:**")
         st.json(meta)
 
-def create_job_api(k=6):
+def create_job_api():
     """Create a new job via API."""
     response = requests.post(f"{BACKEND_URL}/jobs", json={
         "name": f"Streamlit Job {int(time.time())}",
-        "description": "Job created from Streamlit interface",
-        "kmer_k": k
+        "description": "Job created from Streamlit interface"
     })
     if response.status_code == 200:
         return response.json()
@@ -263,19 +227,18 @@ def get_job_status_api(job_id):
     else:
         return None
 
-def download_vectors_api(job_id):
-    """Download vectors CSV via API."""
-    response = requests.get(f"{BACKEND_URL}/jobs/{job_id}/vectors")
+def download_asv_data_api(job_id):
+    """Download ASV metadata via API."""
+    response = requests.get(f"{BACKEND_URL}/jobs/{job_id}/metadata")
     if response.status_code == 200:
-        return response.content
+        return response.json()
     else:
-        st.error(f"Failed to download vectors: {response.text}")
+        st.error(f"Failed to download ASV data: {response.text}")
         return None
 
 # UI Layout
 with st.sidebar:
     st.header("Configuration")
-    k = st.number_input("k-mer length", min_value=3, max_value=8, value=6, step=1)
     
     if API_MODE:
         st.info("🔌 API Mode Enabled")
@@ -288,7 +251,7 @@ with st.sidebar:
     else:
         run_button = st.button("Run Pipeline", type='primary')
 
-st.markdown("Upload FASTQ files to process them through the DeepSea-AI Stage 1 pipeline.")
+st.markdown("Upload FASTQ files to process them through the DeepSea-AI Stage 1 pipeline (Quality Control + ASV Analysis).")
 
 # File upload section
 uploaded_files = st.file_uploader("FASTQ files", type=["fastq", "fq", "gz"], accept_multiple_files=True)
@@ -298,84 +261,115 @@ if API_MODE:
     # Session state for job management
     if 'current_job' not in st.session_state:
         st.session_state.current_job = None
-    
+    if 'job_polling' not in st.session_state:
+        st.session_state.job_polling = False
+
     if create_job_btn:
-        job = create_job_api(k)
+        job = create_job_api()
         if job:
             st.session_state.current_job = job
+            st.session_state.job_polling = False
             st.success(f"✅ Created job #{job['id']}")
-    
+
     if st.session_state.current_job:
         job = st.session_state.current_job
         st.subheader(f"Job #{job['id']}: {job['name']}")
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
+
+        status_col, eta_col, actions_col = st.columns([1, 1, 1])
+        with status_col:
             st.metric("Status", job.get('status', 'Unknown'))
-        with col2:
-            st.metric("k-mer length", job.get('kmer_k', k))
-        with col3:
-            if st.button("🔄 Refresh Status"):
-                updated_job = get_job_status_api(job['id'])
-                if updated_job:
-                    st.session_state.current_job = updated_job
-                    st.rerun()
-        
-        # File upload for current job
-        if uploaded_files and job.get('status') == 'PENDING':
-            if st.button("📤 Upload Files to Job"):
-                upload_result = upload_files_api(job['id'], uploaded_files)
-                if upload_result:
-                    st.success(f"✅ Uploaded {upload_result['count']} files")
-        
-        # Run job
-        if job.get('status') == 'PENDING' and st.button("🚀 Start Processing"):
-            run_result = run_job_api(job['id'])
-            if run_result:
-                st.success("✅ Pipeline started!")
-                time.sleep(1)
-                st.rerun()
-        
-        # Show progress for running jobs
+            if job.get('created_at'):
+                created_at = datetime.fromisoformat(job['created_at'])
+                st.caption(f"Created {created_at.strftime('%Y-%m-%d %H:%M:%S')}")
+            if job.get('updated_at'):
+                updated_at = datetime.fromisoformat(job['updated_at'])
+                st.caption(f"Updated {updated_at.strftime('%Y-%m-%d %H:%M:%S')}")
+
+        with eta_col:
+            if job.get('status') == 'RUNNING':
+                progress_meta = job.get('meta', {}) or {}
+                step = progress_meta.get('progress', {}).get('step', 'fastp')
+                step_map = {
+                    'fastp': ("Quality control", 0.2),
+                    'dada2': ("Denoising", 0.6),
+                    'kmer': ("Vectorizing", 0.85),
+                    'complete': ("Finalizing", 1.0)
+                }
+                label, progress_val = step_map.get(step, ("Preparing", 0.1))
+                st.progress(progress_val, text=f"🚀 {label}")
+            elif job.get('status') == 'COMPLETED':
+                st.success("✅ Finished")
+            elif job.get('status') == 'FAILED':
+                st.error("❌ Failed")
+            else:
+                st.info("⏳ Waiting to start")
+
+        with actions_col:
+            col_refresh, col_poll = st.columns(2)
+            with col_refresh:
+                if st.button("🔄", help="Refresh now"):
+                    updated_job = get_job_status_api(job['id'])
+                    if updated_job:
+                        st.session_state.current_job = updated_job
+                        st.rerun()
+            with col_poll:
+                if st.toggle("Auto-refresh", value=st.session_state.job_polling, key="poll_toggle"):
+                    st.session_state.job_polling = True
+                else:
+                    st.session_state.job_polling = False
+
+            if st.session_state.job_polling:
+                with st.spinner("Polling job status..."):
+                    time.sleep(2)
+                    updated_job = get_job_status_api(job['id'])
+                    if updated_job:
+                        st.session_state.current_job = updated_job
+                        st.rerun()
+
+        if job.get('status') == 'PENDING':
+            upload_col, run_col = st.columns(2)
+            with upload_col:
+                if uploaded_files and st.button("📤 Upload Files"):
+                    upload_result = upload_files_api(job['id'], uploaded_files)
+                    if upload_result:
+                        st.success(f"✅ Uploaded {upload_result['count']} files")
+            with run_col:
+                if st.button("🚀 Start Processing"):
+                    run_result = run_job_api(job['id'])
+                    if run_result:
+                        st.success("✅ Pipeline started")
+                        st.session_state.job_polling = True
+                        time.sleep(1)
+                        st.rerun()
+
         if job.get('status') == 'RUNNING':
-            st.info("🔄 Pipeline is running... Please refresh to check status.")
-            if st.button("Check Progress", key="progress_check"):
-                st.rerun()
-        
-        # Show results for completed jobs
+            st.info("🔄 Pipeline running. We refresh automatically when auto-refresh is enabled.")
+
         if job.get('status') == 'COMPLETED':
             st.success("✅ Pipeline completed successfully!")
-            
-            if st.button("📊 Download k-mer Vectors"):
-                vectors_data = download_vectors_api(job['id'])
-                if vectors_data:
+            asv_data = download_asv_data_api(job['id'])
+            if asv_data and asv_data.get('metadata', {}).get('dada2', {}).get('asv_table'):
+                asv_table_path = asv_data['metadata']['dada2']['asv_table']
+                if os.path.exists(asv_table_path):
+                    asv_df = pd.read_csv(asv_table_path)
+                    csv_data = asv_df.to_csv(index=False)
                     st.download_button(
-                        label="💾 Download CSV",
-                        data=vectors_data,
-                        file_name=f"job_{job['id']}_kmer_vectors.csv",
+                        label="💾 Download ASV table",
+                        data=csv_data,
+                        file_name=f"job_{job['id']}_asv_table.csv",
                         mime="text/csv",
-                        key=f"download_api_vectors_{job['id']}"
+                        key=f"download_api_asv_{job['id']}"
                     )
-            
-            # Show metadata
+
             if job.get('meta'):
                 st.subheader("Pipeline Results")
-                st.json(job['meta'])
-                
-                # Show k-mer vectors preview
-                vectors_csv_path = job.get('meta', {}).get('kmer', {}).get('vectors_csv')
-                if vectors_csv_path:
-                    try:
-                        # Note: In API mode, we'd need to serve this file or embed preview in metadata
-                        st.info("💡 Use 'Download k-mer Vectors' button to get the full CSV file.")
-                    except Exception as e:
-                        st.warning("Preview not available in API mode. Use download button.")
-        
-        # Show errors for failed jobs
+                meta = job['meta']
+                display_pipeline_results(meta, meta.get('interim_dir', ''), meta.get('processed_dir', ''), key_suffix=f"_{job['id']}")
+
         if job.get('status') == 'FAILED':
-            st.error("❌ Pipeline failed!")
+            st.error("❌ Pipeline failed. See error details below.")
             if job.get('error'):
-                st.error(f"Error: {job['error']}")
+                st.exception(RuntimeError(job['error']))
 
 # Direct Mode workflow (original)
 else:
@@ -402,7 +396,6 @@ else:
             st.stop()
             
         cfg = load_config(CONFIG_PATH)
-        cfg['kmer']['k'] = k
         # Write a temp override file
         tmp_cfg_path = Path(tempfile.gettempdir()) / 'pipeline_override.yaml'
         with open(tmp_cfg_path, 'w') as f:
@@ -420,8 +413,7 @@ else:
                     raw_dir=str(target_dir),  # Use uploaded files directory, NOT data/raw/fastq_dataset
                     interim_dir=str(interim_dir),
                     processed_dir=str(processed_dir),
-                    config_path=str(tmp_cfg_path),
-                    k=k
+                    config_path=str(tmp_cfg_path)
                 )
                 st.success("🎉 Pipeline completed successfully!")
                 

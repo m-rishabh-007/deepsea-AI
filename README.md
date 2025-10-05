@@ -1,8 +1,8 @@
-# DeepSea-AI: Stage 1 - Preprocessing & Vectorization
+# DeepSea-AI: Stage 1 - Preprocessing & ASV Analysis
 
 ## Overview
 
-DeepSea-AI Stage 1 is a production-ready bioinformatics pipeline for preprocessing deep-sea eDNA sequencing data and converting it to numerical vectors for downstream AI analysis. The system automatically processes FASTQ files through quality control, ASV inference, and k-mer vectorization.
+DeepSea-AI Stage 1 is a production-ready bioinformatics pipeline for preprocessing deep-sea eDNA sequencing data and generating ASV (Amplicon Sequence Variant) tables for downstream analysis. The system automatically processes FASTQ files through quality control and ASV inference.
 
 ## Architecture
 
@@ -11,7 +11,6 @@ DeepSea-AI Stage 1 is a production-ready bioinformatics pipeline for preprocessi
 1. **Preprocessing Pipeline** (`src/preprocessing/`)
    - `fastp_wrapper.py`: Quality control using fastp
    - `dada2_wrapper.py`: ASV inference using DADA2 R package
-   - `kmer_vectorizer.py`: K-mer profiling and vectorization
    - `read_detection.py`: Automatic paired/single-end detection
 
 2. **Web Interface** (`src/web/`)
@@ -51,9 +50,8 @@ cd SIH-Project
 cp .env.example .env
 # Edit .env as needed
 
-# 3. Build and run all services
-cd docker
-docker-compose up --build
+# 3. Build and run all services (backend now installs R + DADA2 automatically)
+docker compose -f docker/docker-compose.yml up --build
 
 # 4. Access interfaces
 # Streamlit UI: http://localhost:8501
@@ -64,29 +62,32 @@ docker-compose up --build
 ### Option 2: Local Development
 
 ```bash
-# 1. Install dependencies
+# 1. Install Python dependencies
 pip install -r requirements.txt
 
-# 2. Install system dependencies
-# Ubuntu/Debian:
-sudo apt-get install r-base fastp
+# 2. Install system dependencies (Ubuntu/Debian example)
+sudo apt-get update && sudo apt-get install -y \
+  r-base r-base-dev fastp \
+  libcurl4-openssl-dev libssl-dev libxml2-dev \
+  libgit2-dev libbz2-dev liblzma-dev libpcre2-dev
 
-# 3. Install R packages
-R -e "install.packages(c('dada2', 'jsonlite'), repos='https://cloud.r-project.org/')"
+# 3. Install R packages (matches Docker image)
+R -q -e "if (!requireNamespace('BiocManager', quietly = TRUE)) install.packages('BiocManager', repos='https://cloud.r-project.org/')" \
+     -e "if (!requireNamespace('dada2', quietly = TRUE)) BiocManager::install('dada2', ask = FALSE, update = FALSE)" \
+     -e "if (!requireNamespace('jsonlite', quietly = TRUE)) install.packages('jsonlite', repos='https://cloud.r-project.org/')"
 
 # 4. Setup database (optional - for API mode)
-# Install PostgreSQL locally or use Docker:
 docker run -d --name postgres \
   -e POSTGRES_DB=deepsea_ai \
   -e POSTGRES_USER=deepsea \
   -e POSTGRES_PASSWORD=deepsea123 \
   -p 5432:5432 postgres:14
 
-# 5. Run Streamlit interface
-streamlit run src/web/app.py
-
-# 6. Or run FastAPI backend
+# 5. Run FastAPI backend (uses baked R/DADA2)
 uvicorn src.api.main:app --reload
+
+# 6. Run Streamlit interface (optional)
+streamlit run src/web/app.py
 ```
 
 ## Usage
@@ -94,9 +95,8 @@ uvicorn src.api.main:app --reload
 ### Web Interface
 
 1. **Upload FASTQ Files**: Drag and drop or browse for `.fastq`, `.fq`, or `.gz` files
-2. **Configure Parameters**: Set k-mer length (default: 6)
-3. **Process Data**: Click "Run Pipeline" or "Create Job" → "Start Processing"
-4. **Download Results**: Get k-mer vectors as CSV file
+2. **Process Data**: Click "Run Pipeline" or "Create Job" → "Start Processing"
+3. **Download Results**: Get ASV table as CSV file
 
 ### API Usage
 
@@ -106,8 +106,7 @@ import requests
 # 1. Create job
 job = requests.post("http://localhost:8000/jobs", json={
     "name": "My Analysis",
-    "description": "Deep-sea sample analysis",
-    "kmer_k": 6
+    "description": "Deep-sea sample analysis"
 }).json()
 
 # 2. Upload files
@@ -121,7 +120,7 @@ requests.post(f"http://localhost:8000/jobs/{job['id']}/run")
 status = requests.get(f"http://localhost:8000/jobs/{job['id']}").json()
 
 # 5. Download results (when completed)
-vectors = requests.get(f"http://localhost:8000/jobs/{job['id']}/vectors")
+asv_data = requests.get(f"http://localhost:8000/jobs/{job['id']}/metadata")
 ```
 
 ## Pipeline Details
@@ -131,8 +130,7 @@ vectors = requests.get(f"http://localhost:8000/jobs/{job['id']}/vectors")
 1. **Input**: Raw FASTQ files (paired-end or single-end)
 2. **Quality Control**: fastp removes low-quality reads and adapters
 3. **ASV Inference**: DADA2 resolves Amplicon Sequence Variants
-4. **Vectorization**: K-mer profiling converts sequences to numerical vectors
-5. **Output**: CSV file with k-mer frequency vectors
+4. **Output**: ASV table with sequence variants and abundance counts
 
 ### Supported File Formats
 
@@ -200,15 +198,22 @@ SIH-Project/
 ### Running Tests
 
 ```bash
-# Run all tests
+# Run all unit tests (excludes slow integration)
 pytest tests/
 
 # Run specific test file
 pytest tests/test_api.py -v
 
+# Run pipeline integration smoke test (requires Docker)
+pytest tests/test_integration.py -m integration
+
 # Run with coverage
 pytest tests/ --cov=src/
 ```
+
+### Integration Smoke Test Details
+
+The integration test spins up PostgreSQL and the FastAPI backend via Docker Compose, uploads a real FASTQ sample (`fastq_dataset/real_sample.fastq`), runs the full pipeline, and asserts that fastp, DADA2, and k-mer outputs are produced. To skip these slower integration tests, add `-m "not integration"` to the pytest command.
 
 ### Adding New Features
 

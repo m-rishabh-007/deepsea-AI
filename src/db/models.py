@@ -18,7 +18,6 @@ class PipelineJob(Base):
     raw_dir = Column(String(255), nullable=False)
     interim_dir = Column(String(255), nullable=False)
     processed_dir = Column(String(255), nullable=False)
-    kmer_k = Column(Integer, default=6)
     meta = Column(JSON, nullable=True)
     error = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
