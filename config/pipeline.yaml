@@ -1,10 +1,11 @@
-# Default configuration for DeepSea-AI Stage 1 pipeline
+# Default configuration for DeepSea-AI pipeline (Stage 1 + Stage 2)
 paths:
   raw_fastq_dir: data/raw/fastq_dataset
   interim_dir: data/interim
   processed_dir: data/processed
   logs_dir: logs
 
+# Stage 1: Preprocessing and ASV Inference
 fastp:
   enabled: true
   threads: 4
@@ -23,6 +24,14 @@ dada2:
   chimera_method: consensus
   min_fold_parent_over_abundance: 1.0
   output_prefix: dada2
+
+# Stage 2: Discovery Engine (Novel Taxa Discovery)
+discovery:
+  enabled: true
+  min_cluster_size: 5      # Minimum cluster size for HDBSCAN
+  min_samples: null        # Minimum samples parameter (null = auto)
+  batch_size: 32           # Batch size for DNABERT-S embedding generation
+  model_name: "zhihan1996/DNABERT-S"  # Pre-trained model identifier
 
 logging:
   level: INFO

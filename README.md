@@ -1,8 +1,13 @@
-# DeepSea-AI: Stage 1 - Preprocessing & ASV Analysis
+# DeepSea-AI: Complete Pipeline (Stage 1 + Stage 2)
 
 ## Overview
 
-DeepSea-AI Stage 1 is a production-ready bioinformatics pipeline for preprocessing deep-sea eDNA sequencing data and generating ASV (Amplicon Sequence Variant) tables for downstream analysis. The system automatically processes FASTQ files through quality control and ASV inference.
+DeepSea-AI is a comprehensive bioinformatics pipeline for processing deep-sea eDNA sequencing data and discovering novel taxonomic groups. The system combines traditional ASV analysis (**Stage 1**) with cutting-edge AI-powered discovery (**Stage 2**) to identify potentially new marine species and taxonomic groups.
+
+### Pipeline Stages
+
+- **Stage 1**: Preprocessing & ASV Analysis (Quality Control → DADA2 → ASV generation)
+- **Stage 2**: AI-Powered Discovery Engine (DNABERT-S embeddings → HDBSCAN clustering)
 
 ## Architecture
 
@@ -13,29 +18,39 @@ DeepSea-AI Stage 1 is a production-ready bioinformatics pipeline for preprocessi
    - `dada2_wrapper.py`: ASV inference using DADA2 R package
    - `read_detection.py`: Automatic paired/single-end detection
 
-2. **Web Interface** (`src/web/`)
+2. **Discovery Engine** (`src/discovery/`)
+   - `discovery_engine.py`: AI-powered novel taxa discovery using DNABERT-S and HDBSCAN
+   - ASV sequence → DNABERT-S embeddings → clustering → novel taxonomic groups
+
+3. **Web Interface** (`src/web/`)
    - `app.py`: Streamlit interface with dual mode support
    - Direct mode: Local pipeline execution
    - API mode: Backend integration for production
+   - Discovery results visualization and cluster analysis
 
-3. **REST API Backend** (`src/api/`)
+4. **REST API Backend** (`src/api/`)
    - `main.py`: FastAPI service with job management
-   - Endpoints: Job creation, file upload, pipeline execution, status monitoring
+   - Stage 1 endpoints: Job creation, file upload, pipeline execution, status monitoring
+   - Stage 2 endpoints: Discovery status, results access, cluster details
 
-4. **Database Layer** (`src/db/`)
+5. **Database Layer** (`src/db/`)
    - PostgreSQL integration with SQLAlchemy ORM
    - Job tracking, status management, and metadata storage
 
-5. **Configuration** (`config/`)
+6. **Configuration** (`config/`)
    - `pipeline.yaml`: Pipeline parameters and tool configurations
 
 ## Features
 
+- **Two-Stage Analysis**: Complete workflow from raw sequences to novel taxa discovery
+- **AI-Powered Discovery**: DNABERT-S foundation model for genomic embeddings
+- **Unsupervised Clustering**: HDBSCAN for identifying novel taxonomic groups
 - **Automatic Format Detection**: Supports both paired-end and single-end FASTQ files
 - **Production-Ready**: Docker containerization, database persistence, job isolation
 - **Scalable Architecture**: Background job processing with status tracking
 - **Flexible Interface**: Both direct and API-based processing modes
-- **Comprehensive Testing**: Unit tests for API and database functionality
+- **Comprehensive Testing**: Unit tests for all pipeline components
+- **Interactive Visualization**: Cluster analysis and discovery results display
 
 ## Quick Start
 
@@ -62,7 +77,7 @@ docker compose -f docker/docker-compose.yml up --build
 ### Option 2: Local Development
 
 ```bash
-# 1. Install Python dependencies
+# 1. Install Python dependencies (includes PyTorch, Transformers, HDBSCAN)
 pip install -r requirements.txt
 
 # 2. Install system dependencies (Ubuntu/Debian example)
@@ -83,10 +98,10 @@ docker run -d --name postgres \
   -e POSTGRES_PASSWORD=deepsea123 \
   -p 5432:5432 postgres:14
 
-# 5. Run FastAPI backend (uses baked R/DADA2)
+# 5. Run FastAPI backend
 uvicorn src.api.main:app --reload
 
-# 6. Run Streamlit interface (optional)
+# 6. Run Streamlit interface
 streamlit run src/web/app.py
 ```
 
@@ -95,8 +110,12 @@ streamlit run src/web/app.py
 ### Web Interface
 
 1. **Upload FASTQ Files**: Drag and drop or browse for `.fastq`, `.fq`, or `.gz` files
-2. **Process Data**: Click "Run Pipeline" or "Create Job" → "Start Processing"
-3. **Download Results**: Get ASV table as CSV file
+2. **Configure Pipeline**: Enable/disable Stage 2 discovery engine
+3. **Process Data**: Click "Run Pipeline" or "Create Job" → "Start Processing"
+4. **View Results**: 
+   - Stage 1: ASV table, quality metrics, processing statistics
+   - Stage 2: Discovery clusters, novel taxa groups, cluster details
+5. **Download Results**: ASV table and discovery results as CSV files
 
 ### API Usage
 
@@ -119,18 +138,32 @@ requests.post(f"http://localhost:8000/jobs/{job['id']}/run")
 # 4. Check status
 status = requests.get(f"http://localhost:8000/jobs/{job['id']}").json()
 
-# 5. Download results (when completed)
-asv_data = requests.get(f"http://localhost:8000/jobs/{job['id']}/metadata")
+# 5. Get discovery results (Stage 2 - if enabled)
+discovery_status = requests.get(f"http://localhost:8000/jobs/{job['id']}/discovery/status").json()
+if discovery_status['has_discovery_results']:
+    discovery_data = requests.get(f"http://localhost:8000/jobs/{job['id']}/discovery/results").json()
+    print(f"Clusters found: {discovery_data['clusters_found']}")
+    
+    # Get cluster details
+    cluster_details = requests.get(f"http://localhost:8000/jobs/{job['id']}/discovery/clusters/0").json()
+    
+    # Download discovery results
+    csv_data = requests.get(f"http://localhost:8000/jobs/{job['id']}/discovery/download").content
 ```
 
 ## Pipeline Details
 
-### Stage 1 Workflow
+### Complete Workflow
 
 1. **Input**: Raw FASTQ files (paired-end or single-end)
-2. **Quality Control**: fastp removes low-quality reads and adapters
-3. **ASV Inference**: DADA2 resolves Amplicon Sequence Variants
-4. **Output**: ASV table with sequence variants and abundance counts
+2. **Stage 1**: Quality Control → ASV Inference
+   - **Quality Control**: fastp removes low-quality reads and adapters
+   - **ASV Inference**: DADA2 resolves Amplicon Sequence Variants
+3. **Stage 2**: AI-Powered Discovery (optional)
+   - **Embedding Generation**: DNABERT-S creates 768-dimensional sequence embeddings
+   - **Clustering**: HDBSCAN identifies novel taxonomic groups
+   - **Analysis**: Cluster statistics and representative sequences
+4. **Output**: ASV table + Discovery results with cluster assignments
 
 ### Supported File Formats
 
@@ -171,9 +204,13 @@ fastp:
 dada2:
   truncLen: [240, 160]  # For paired-end
   maxEE: [2, 2]
-  
-kmer:
-  k: 6  # Can be overridden per job
+
+# Discovery Engine (Stage 2)
+discovery:
+  enabled: true                    # Enable/disable Stage 2
+  min_cluster_size: 5             # Minimum sequences per cluster
+  batch_size: 32                  # Embedding generation batch size
+  model_name: "zhihan1996/DNABERT-S"  # Pre-trained model
 ```
 
 ## Directory Layout
@@ -181,7 +218,8 @@ kmer:
 ```
 SIH-Project/
 ├── src/
-│   ├── preprocessing/     # Core pipeline modules
+│   ├── preprocessing/     # Stage 1 pipeline modules
+│   ├── discovery/         # Stage 2 discovery engine
 │   ├── web/              # Streamlit interface
 │   ├── api/              # FastAPI backend
 │   ├── db/               # Database layer
@@ -198,11 +236,13 @@ SIH-Project/
 ### Running Tests
 
 ```bash
-# Run all unit tests (excludes slow integration)
+# Run all unit tests
 pytest tests/
 
-# Run specific test file
-pytest tests/test_api.py -v
+# Run specific test modules
+pytest tests/test_api.py -v                    # API endpoints
+pytest tests/test_discovery_engine.py -v       # Discovery engine
+pytest tests/test_dada2_wrapper.py -v         # DADA2 integration
 
 # Run pipeline integration smoke test (requires Docker)
 pytest tests/test_integration.py -m integration
@@ -217,10 +257,11 @@ The integration test spins up PostgreSQL and the FastAPI backend via Docker Comp
 
 ### Adding New Features
 
-1. **Pipeline Extensions**: Add new modules in `src/preprocessing/`
-2. **API Endpoints**: Extend `src/api/main.py`
+1. **Pipeline Extensions**: Add new modules in `src/preprocessing/` or `src/discovery/`
+2. **API Endpoints**: Extend `src/api/main.py` with new discovery or analysis endpoints
 3. **Database Models**: Update `src/db/models.py` and create migrations
-4. **UI Components**: Modify `src/web/app.py`
+4. **UI Components**: Modify `src/web/app.py` for new visualization features
+5. **Discovery Algorithms**: Extend `src/discovery/discovery_engine.py` with new AI models
 
 ## Production Deployment
 
@@ -242,10 +283,12 @@ The provided `docker-compose.yml` includes:
 
 ### Common Issues
 
-1. **R/DADA2 Installation**: Ensure R and DADA2 package are properly installed
-2. **fastp Not Found**: Install fastp binary or use Docker version
-3. **Database Connection**: Verify PostgreSQL is running and credentials are correct
-4. **Memory Issues**: Large FASTQ files may require increased container memory
+1. **PyTorch/CUDA Setup**: Ensure compatible PyTorch version for your system (CPU/GPU)
+2. **DNABERT-S Model Download**: First run downloads ~400MB model from HuggingFace
+3. **Memory Requirements**: Discovery engine needs sufficient RAM for embeddings (recommend 8GB+)
+4. **R/DADA2 Installation**: Ensure R and DADA2 package are properly installed
+5. **fastp Not Found**: Install fastp binary or use Docker version
+6. **Database Connection**: Verify PostgreSQL is running and credentials are correct
 
 ### Log Files
 
@@ -255,10 +298,11 @@ The provided `docker-compose.yml` includes:
 
 ## Next Steps
 
-This Stage 1 module prepares data for:
-- **Stage 2**: Nucleotide Transformer classification
-- **Stage 3**: UMAP/HDBSCAN discovery engine
-- **Integration**: Full DeepSea-AI hybrid system
+This complete pipeline provides:
+- **Production-Ready ASV Analysis**: High-quality sequence variant calling
+- **AI-Powered Discovery**: Novel taxonomic group identification
+- **Scalable Architecture**: Ready for high-throughput marine biodiversity studies
+- **Research Integration**: Compatible with downstream phylogenetic and ecological analyses
 
 ## License
 

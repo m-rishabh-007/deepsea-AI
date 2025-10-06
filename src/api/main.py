@@ -8,6 +8,8 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import io
+import pandas as pd
+import json
 from typing import List
 
 from src.db.session import get_db
@@ -21,7 +23,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="DeepSea-AI Stage 1 API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="DeepSea-AI Pipeline API", version="2.0.0", lifespan=lifespan)
 
 # Thread pool for background tasks
 executor = ThreadPoolExecutor(max_workers=2)
@@ -168,10 +170,205 @@ def get_job_metadata(job_id: int, db: Session = Depends(get_db)):
         "updated_at": job.updated_at
     }
 
+# Discovery Engine Endpoints
+
+@app.get("/jobs/{job_id}/discovery/status", response_model=schemas.DiscoveryStatus)
+def get_discovery_status(job_id: int, db: Session = Depends(get_db)):
+    """Get discovery engine status for a job."""
+    job = crud.get_job(db, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Check if discovery results exist
+    processed_dir = Path(job.processed_dir)
+    discovery_file = processed_dir / "discovery_engine_results.csv"
+    
+    # Extract discovery info from job metadata
+    meta = job.meta or {}
+    stage2_enabled = meta.get("stage2_enabled", False)
+    discovery_completed = False
+    error_message = None
+    
+    # Check progress history for discovery completion
+    progress = meta.get("progress", {})
+    history = progress.get("history", [])
+    
+    for entry in history:
+        if entry.get("step") == "discovery":
+            if entry.get("status") == "finished":
+                discovery_completed = True
+            elif entry.get("status") == "failed":
+                error_message = entry.get("message", "Discovery engine failed")
+    
+    return schemas.DiscoveryStatus(
+        job_id=job_id,
+        has_discovery_results=discovery_file.exists(),
+        discovery_completed=discovery_completed,
+        stage2_enabled=stage2_enabled,
+        results_file=str(discovery_file) if discovery_file.exists() else None,
+        error_message=error_message
+    )
+
+@app.get("/jobs/{job_id}/discovery/results", response_model=schemas.DiscoveryResults)
+def get_discovery_results(job_id: int, db: Session = Depends(get_db)):
+    """Get discovery engine results for a job."""
+    job = crud.get_job(db, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Check if discovery results exist
+    processed_dir = Path(job.processed_dir)
+    discovery_file = processed_dir / "discovery_engine_results.csv"
+    
+    if not discovery_file.exists():
+        raise HTTPException(
+            status_code=404, 
+            detail="Discovery results not found. Make sure Stage 2 was enabled and completed successfully."
+        )
+    
+    try:
+        # Load discovery results
+        df = pd.read_csv(discovery_file)
+        
+        # Validate required columns
+        required_cols = ['sequence', 'count', 'cluster_id']
+        if not all(col in df.columns for col in required_cols):
+            raise HTTPException(
+                status_code=500,
+                detail=f"Discovery results file missing required columns: {required_cols}"
+            )
+        
+        # Create sequence list
+        sequences = [
+            schemas.DiscoverySequence(
+                sequence=row['sequence'],
+                count=int(row['count']),
+                cluster_id=int(row['cluster_id'])
+            )
+            for _, row in df.iterrows()
+        ]
+        
+        # Calculate cluster summaries
+        cluster_stats = df[df['cluster_id'] != -1].groupby('cluster_id').agg({
+            'sequence': 'count',
+            'count': ['sum', 'idxmax']
+        }).round().astype(int)
+        
+        clusters = []
+        if not cluster_stats.empty:
+            for cluster_id in cluster_stats.index:
+                sequence_count = cluster_stats.loc[cluster_id, ('sequence', 'count')]
+                total_reads = cluster_stats.loc[cluster_id, ('count', 'sum')]
+                max_idx = cluster_stats.loc[cluster_id, ('count', 'idxmax')]
+                representative_seq = df.loc[max_idx, 'sequence']
+                
+                clusters.append(schemas.ClusterSummary(
+                    cluster_id=int(cluster_id),
+                    sequence_count=int(sequence_count),
+                    total_reads=int(total_reads),
+                    representative_sequence=representative_seq
+                ))
+        
+        # Calculate summary statistics
+        total_sequences = len(df)
+        clusters_found = len(df[df['cluster_id'] != -1]['cluster_id'].unique())
+        noise_sequences = len(df[df['cluster_id'] == -1])
+        
+        return schemas.DiscoveryResults(
+            job_id=job_id,
+            total_sequences=total_sequences,
+            clusters_found=clusters_found,
+            noise_sequences=noise_sequences,
+            clusters=clusters,
+            sequences=sequences
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing discovery results: {str(e)}"
+        )
+
+@app.get("/jobs/{job_id}/discovery/download")
+def download_discovery_results(job_id: int, db: Session = Depends(get_db)):
+    """Download discovery results CSV file."""
+    job = crud.get_job(db, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    processed_dir = Path(job.processed_dir)
+    discovery_file = processed_dir / "discovery_engine_results.csv"
+    
+    if not discovery_file.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Discovery results not found"
+        )
+    
+    return FileResponse(
+        path=discovery_file,
+        filename=f"discovery_results_job_{job_id}.csv",
+        media_type="text/csv"
+    )
+
+@app.get("/jobs/{job_id}/discovery/clusters/{cluster_id}")
+def get_cluster_details(job_id: int, cluster_id: int, db: Session = Depends(get_db)):
+    """Get detailed information about a specific cluster."""
+    job = crud.get_job(db, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    processed_dir = Path(job.processed_dir)
+    discovery_file = processed_dir / "discovery_engine_results.csv"
+    
+    if not discovery_file.exists():
+        raise HTTPException(status_code=404, detail="Discovery results not found")
+    
+    try:
+        df = pd.read_csv(discovery_file)
+        cluster_data = df[df['cluster_id'] == cluster_id]
+        
+        if cluster_data.empty:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Cluster {cluster_id} not found"
+            )
+        
+        sequences = [
+            {
+                "sequence": row['sequence'],
+                "count": int(row['count']),
+                "length": len(row['sequence'])
+            }
+            for _, row in cluster_data.iterrows()
+        ]
+        
+        # Sort by count (descending)
+        sequences.sort(key=lambda x: x['count'], reverse=True)
+        
+        return {
+            "cluster_id": cluster_id,
+            "sequence_count": len(sequences),
+            "total_reads": int(cluster_data['count'].sum()),
+            "sequences": sequences,
+            "representative_sequence": sequences[0]['sequence'] if sequences else None
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing cluster data: {str(e)}"
+        )
+
 @app.get("/health")
 def health_check():
     """Health check endpoint."""
-    return {"status": "healthy", "service": "deepsea-stage1-api"}
+    return {
+        "status": "healthy", 
+        "service": "deepsea-ai-pipeline-api",
+        "version": "2.0.0",
+        "features": ["stage1_pipeline", "stage2_discovery", "cluster_analysis"]
+    }
 
 if __name__ == "__main__":
     import uvicorn
